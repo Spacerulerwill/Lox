@@ -8,10 +8,21 @@ use std::io::Write;
 use std::{env, fs, io};
 
 use parser::{parse, ParserError};
-use tokenizer::{tokenize, TokenizerError};
+use tokenizer::{tokenize, TokenizerError, Literal};
 use expr::RuntimeError;
 
-fn run(source: &String) {
+#[derive(Debug)]
+pub struct InterpreterState {
+    pub globals: HashMap<String, Literal>
+}
+
+impl InterpreterState {
+    pub fn new() -> Self {
+        Self { globals: HashMap::new() }
+    }
+}
+
+fn run(interpreter_state: &mut InterpreterState, source: &String) {
     // Tokenization
     let tokens = match tokenize(source) {
         Ok(tokens) => tokens,
@@ -55,25 +66,25 @@ fn run(source: &String) {
     };
 
     // Interpreting
-    let mut values = HashMap::new();
     for statement in statements {
-        if let Err(err) = statement.interpret(&mut values) {
+        if let Err(err) = statement.interpret(interpreter_state) {
             match err {
                 RuntimeError::TypeError(token, msg) =>  println!("Type Error :: Line {}, Col {} :: {}", token.line, token.col, &msg),
+                RuntimeError::NameError(token) =>  println!("Name Error :: Line {}, Col {} :: Name '{}' not defined", token.line, token.col, &token.lexeme),
             }
         }
     }
 }
 
-fn run_file(path: &String) -> Result<(), std::io::Error> {
+fn run_file(interpreter_state: &mut InterpreterState, path: &String) -> Result<(), std::io::Error> {
     let source = fs::read_to_string(path)?;
-    run(&source);
+    run(interpreter_state,&source);
     Ok(())
 }
 
-fn run_prompt() {
+fn run_prompt(interpreter_state: &mut InterpreterState) {
     loop {
-        print!(">> ");
+        print!(">>> ");
         io::stdout().flush().expect("Failed to flush stdout");
         let mut input = String::new();
         io::stdin()
@@ -82,19 +93,20 @@ fn run_prompt() {
         if input.trim().is_empty() {
             break;
         }
-        run(&input)
+        run(interpreter_state,&input)
     }
 }
 
 fn main() {
+    let mut interpreter_state = InterpreterState::new();
     let args: Vec<String> = env::args().collect();
     if args.len() > 2 {
         println!("Usage: lox-rs [script]");
     } else if args.len() == 2 {
-        if let Err(err) = run_file(&args[1]) {
+        if let Err(err) = run_file(&mut interpreter_state,&args[1]) {
             println!("Failed to open the file {}: {err}", &args[1]);
         }
     } else {
-        run_prompt();
+        run_prompt(&mut interpreter_state);
     }
 }

@@ -1,4 +1,6 @@
-use crate::tokenizer::{Literal, Token, TokenType};
+use std::collections::HashMap;
+
+use crate::{tokenizer::{Literal, Token, TokenType}, InterpreterState};
 
 #[derive(Debug, PartialEq)]
 pub enum Expr {
@@ -17,19 +19,23 @@ pub enum Expr {
     Literal {
         literal: Literal
     },
+    Variable {
+        name: Token
+    }
 }
 
 #[derive(Debug)]
 pub enum RuntimeError {
-    TypeError(Token, String)
+    TypeError(Token, String),
+    NameError(Token)
 }
 
 impl Expr {
-    pub fn evaluate(self) -> Result<Literal, RuntimeError> {
+    pub fn evaluate(self, interpreter_state: &mut InterpreterState) -> Result<Literal, RuntimeError> {
         match self {
             Expr::Binary { lhs, op, rhs } => {
-                let op1 = lhs.evaluate()?;
-                let op2 = rhs.evaluate()?;
+                let op1 = lhs.evaluate(interpreter_state)?;
+                let op2 = rhs.evaluate(interpreter_state)?;
                 match op.token_type {
                     TokenType::Plus => {
                         match (op1, op2) {
@@ -90,7 +96,7 @@ impl Expr {
                 }
             },
             Expr::Unary { op, rhs } => {
-                let literal = rhs.evaluate()?;
+                let literal = rhs.evaluate(interpreter_state)?;
                 match op.token_type {
                     TokenType::Minus => {
                         match literal {
@@ -107,8 +113,14 @@ impl Expr {
                     _ => panic!("Failure evaluating unary expression")
                 }
             },
-            Expr::Grouping { expr } => Ok(expr.evaluate()?),
+            Expr::Grouping { expr } => Ok(expr.evaluate(interpreter_state)?),
             Expr::Literal { literal } => Ok(literal),
+            Expr::Variable { name } => {
+                match interpreter_state.globals.get(&name.lexeme) {
+                    Some(val) => Ok(val.clone()),
+                    None => Err(RuntimeError::NameError(name))
+                }
+            }  
         }
     }
 }

@@ -1,9 +1,23 @@
 use crate::expr::Expr;
 use crate::stmt::Stmt;
-use crate::tokenizer::{Token, TokenType};
+use crate::tokenizer::{Token, TokenType, Literal};
 
 /*
-Grammar for an expression (something that evaluates to a value)
+PROGRAM
+program        → declaration* EOF ;
+
+DECLARATIONS
+declaration    → varDecl
+               | statement ;
+varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
+
+STATEMENTS
+statement      → exprStmt
+               | printStmt ;
+exprStmt       → expression ";" ;
+printStmt      → "print" expression ";" ;
+
+EXPRESSIONS
 expression → equality ;
 equality → comparison ( ( "!=" | "==" ) comparison )* ;
 comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
@@ -35,7 +49,7 @@ impl ParserState {
         }
     }
 
-    fn is_next(&mut self, types: &[TokenType]) -> bool {
+    fn advance_if_next(&mut self, types: &[TokenType]) -> bool {
         for ty in types {
             if self.check(ty.clone()) {
                 self.advance();
@@ -80,7 +94,7 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
 
     fn equality(state: &mut ParserState) -> Result<Expr, ParserError> {
         let mut expr = comparison(state)?;
-        while state.is_next(&[TokenType::BangEqual, TokenType::EqualEqual]) {
+        while state.advance_if_next(&[TokenType::BangEqual, TokenType::EqualEqual]) {
             let operator = state.previous().clone();
             let right = comparison(state)?;
             expr = Expr::Binary { lhs: Box::new(expr), op: operator, rhs: Box::new(right) };
@@ -90,7 +104,7 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
 
     fn comparison(state: &mut ParserState) -> Result<Expr, ParserError> {
         let mut expr = term(state)?;
-        while state.is_next(&[TokenType::Greater, TokenType::GreaterEqual, TokenType::Less, TokenType::LessEqual]) {
+        while state.advance_if_next(&[TokenType::Greater, TokenType::GreaterEqual, TokenType::Less, TokenType::LessEqual]) {
             let operator = state.previous().clone();
             let right = term(state)?;
             expr = Expr::Binary { lhs: Box::new(expr), op: operator, rhs: Box::new(right) }
@@ -100,7 +114,7 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
 
     fn term(state: &mut ParserState) -> Result<Expr, ParserError> {
         let mut expr = factor(state)?;
-        while state.is_next(&[TokenType::Minus, TokenType::Plus]) {
+        while state.advance_if_next(&[TokenType::Minus, TokenType::Plus]) {
             let operator = state.previous().clone();
             let right = factor(state)?;
             expr = Expr::Binary { lhs: Box::new(expr), op: operator, rhs: Box::new(right) };
@@ -110,7 +124,7 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
 
     fn factor(state: &mut ParserState) -> Result<Expr, ParserError> {
         let mut expr = unary(state)?;
-        while state.is_next(&[TokenType::Slash, TokenType::Star]) {
+        while state.advance_if_next(&[TokenType::Slash, TokenType::Star]) {
             let operator = state.previous().clone();
             let right = unary(state)?;
             expr = Expr::Binary { lhs: Box::new(expr), op: operator, rhs: Box::new(right) }
@@ -119,7 +133,7 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
     }
 
     fn unary(state: &mut ParserState) -> Result<Expr, ParserError> {
-        if state.is_next(&[TokenType::Bang, TokenType::Minus]) {
+        if state.advance_if_next(&[TokenType::Bang, TokenType::Minus]) {
             let operator = state.previous().clone();
             let right = unary(state)?;
             return Ok(Expr::Unary { op: operator, rhs: Box::new(right) });
@@ -127,11 +141,19 @@ fn parse_expression(state: &mut ParserState) -> Result<Expr, ParserError> {
         Ok(primary(state)?)
     }
 
-    fn primary(state: &mut ParserState) -> Result<Expr, ParserError> {
+    fn primary(state: &mut ParserState) -> Result<Expr, ParserError> {;
         match state.peek().token_type.clone() {
             TokenType::Literal(literal) => {
-                state.advance();
-                return Ok(Expr::Literal { literal: literal.clone()});
+                match literal {
+                    Literal::Identifier(identifier) => {
+                        state.advance();
+                        return Ok(Expr::Variable { name: state.previous().clone() });
+                    }
+                    _ => {
+                        state.advance();
+                        return Ok(Expr::Literal { literal: literal.clone()});
+                    }
+                }
             }
             TokenType::LeftParenthesis => {
                 state.advance();
@@ -160,10 +182,37 @@ fn parse_statement(state: &mut ParserState) -> Result<Stmt, ParserError> {
         Ok(Stmt::Expression { expr: value })
     }
 
-    if state.is_next(&[TokenType::Print]) {
+    if state.advance_if_next(&[TokenType::Print]) {
         return print_statement(state);
     } else {
         return expression_statement(state);
+    }
+}
+
+fn parse_declaration(state: &mut ParserState) -> Result<Stmt, ParserError> {
+    fn var_declaration(state: &mut ParserState) -> Result<Stmt, ParserError> {
+        let name = if let TokenType::Literal(Literal::Identifier(_)) = state.peek().token_type {
+            state.peek().clone()
+        } else {
+            return Err(ParserError::SyntaxError(state.peek().clone(), String::from("Expected variable name.")));
+        };
+        state.advance();
+
+        let initializer;
+        if state.advance_if_next(&[TokenType::Equal]) {
+            initializer = parse_expression(state)?;
+        } else {
+            initializer = Expr::Literal { literal: Literal::Nil };
+        }
+
+        state.consume(TokenType::Semicolon, "Expected ';' after variable declaration")?;
+        Ok(Stmt::Var { token: name, intializer: initializer })
+    }
+
+    if state.advance_if_next(&[TokenType::Var]) {
+        var_declaration(state)
+    } else {
+        parse_statement(state)
     }
 }
 
@@ -172,7 +221,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<Vec<Stmt>, ParserError> {
     let mut statements = Vec::new();
 
     while !state.at_end() {
-        statements.push(parse_statement(&mut state)?)
+        statements.push(parse_declaration(&mut state)?)
     }
     Ok(statements)
 }
